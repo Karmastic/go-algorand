@@ -26,7 +26,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/algorand/go-algorand/cmd/algorelay/eb"
+	"github.com/algorand/go-algorand/cmd/algorelay/afnetwork"
 	"github.com/algorand/go-algorand/tools/network/cloudflare"
 	"github.com/algorand/go-algorand/util/codecs"
 )
@@ -37,7 +37,7 @@ var (
 	srvDomainArg    string // e.g. algorand.network
 	nameDomainArg   string // e.g. algorand-mainnet.network
 	defaultPortArg  uint16
-	dnsBootstrapArg string // e.g. mainnet or testnet
+	networkNameArg  string // e.g. mainnet or testnet
 	recordIDArg     int64
 
 	cfEmail   string
@@ -71,8 +71,8 @@ func init() {
 	checkCmd.MarkFlagRequired("namedomain")
 	checkCmd.Flags().Uint16VarP(&defaultPortArg, "defaultport", "p", 4160, "Default listening port (eg 4160)")
 	checkCmd.MarkFlagRequired("defaultport")
-	checkCmd.Flags().StringVarP(&dnsBootstrapArg, "dnsbootstrap", "b", "", "Bootstrap name for SRV records (eg mainnet)")
-	checkCmd.MarkFlagRequired("dnsbootstrap")
+	checkCmd.Flags().StringVar(&networkNameArg, "network", "", "Network name / Bootstrap name for SRV records (eg mainnet or testnet)")
+	checkCmd.MarkFlagRequired("network")
 
 	rootCmd.AddCommand(updateCmd)
 
@@ -89,12 +89,12 @@ func init() {
 	updateCmd.MarkFlagRequired("namedomain")
 	updateCmd.Flags().Uint16VarP(&defaultPortArg, "defaultport", "p", 4160, "Default listening port (eg 4160)")
 	updateCmd.MarkFlagRequired("defaultport")
-	updateCmd.Flags().StringVarP(&dnsBootstrapArg, "dnsbootstrap", "b", "", "Bootstrap name for SRV records (eg mainnet)")
-	updateCmd.MarkFlagRequired("dnsbootstrap")
+	checkCmd.Flags().StringVar(&networkNameArg, "network", "", "Network name / Bootstrap name for SRV records (eg mainnet or testnet)")
+	updateCmd.MarkFlagRequired("network")
 }
 
-func loadRelays(file string) []eb.Relay {
-	var relays []eb.Relay
+func loadRelays(file string) []afnetwork.Relay {
+	var relays []afnetwork.Relay
 	err := codecs.LoadObjectFromFile(file, &relays)
 	if err != nil {
 		panic(err)
@@ -141,7 +141,7 @@ func makeDNSContext() *dnsContext {
 		panic(err)
 	}
 
-	bootstrap, err := getSrvRecords("_algobootstrap", dnsBootstrapArg+"."+srvDomainArg, srvZoneID)
+	bootstrap, err := getSrvRecords("_algobootstrap", networkNameArg+"."+srvDomainArg, srvZoneID)
 	if err != nil {
 		panic(err)
 	}
@@ -190,10 +190,14 @@ var checkCmd = &cobra.Command{
 				continue
 			}
 
+			if relay.Network != networkNameArg {
+				continue
+			}
+
 			const checkOnly = true
 			name, port, err := ensureRelayStatus(checkOnly, relay, nameDomainArg, srvDomainArg, defaultPortArg, context)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[%d] ERROR: %s: %s\n", relay.ID, relay.IPOrDNSName, err)
+				fmt.Fprintf(os.Stderr, "[%d] ERROR: %s: %s\n", relay.ID, relay.Address, err)
 				results = append(results, checkResult{
 					ID:      relay.ID,
 					Success: false,
@@ -201,7 +205,7 @@ var checkCmd = &cobra.Command{
 				})
 				anyCheckError = true
 			} else {
-				fmt.Printf("[%d] OK: %s -> %s:%d\n", relay.ID, relay.IPOrDNSName, name, port)
+				fmt.Printf("[%d] OK: %s -> %s:%d\n", relay.ID, relay.Address, name, port)
 				results = append(results, checkResult{
 					ID:      relay.ID,
 					Success: true,
@@ -241,15 +245,19 @@ var updateCmd = &cobra.Command{
 				continue
 			}
 
+			if relay.Network != networkNameArg {
+				continue
+			}
+
 			if !relay.CheckSuccess {
-				fmt.Printf("[%d] OK: Skipping NotSuccessful %s\n", relay.ID, relay.IPOrDNSName)
+				fmt.Printf("[%d] OK: Skipping NotSuccessful %s\n", relay.ID, relay.Address)
 				// Don't output results if skipped
 				continue
 			}
 			const checkOnly = false
 			name, port, err := ensureRelayStatus(checkOnly, relay, nameDomainArg, srvDomainArg, defaultPortArg, context)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[%d] ERROR: %s: %s\n", relay.ID, relay.IPOrDNSName, err)
+				fmt.Fprintf(os.Stderr, "[%d] ERROR: %s: %s\n", relay.ID, relay.Address, err)
 				results = append(results, checkResult{
 					ID:      relay.ID,
 					Success: false,
@@ -257,7 +265,7 @@ var updateCmd = &cobra.Command{
 				})
 				anyUpdateError = true
 			} else {
-				fmt.Printf("[%d] OK: %s -> %s:%d\n", relay.ID, relay.IPOrDNSName, name, port)
+				fmt.Printf("[%d] OK: %s -> %s:%d\n", relay.ID, relay.Address, name, port)
 				results = append(results, checkResult{
 					ID:      relay.ID,
 					Success: true,
@@ -280,11 +288,11 @@ var updateCmd = &cobra.Command{
 	},
 }
 
-func ensureRelayStatus(checkOnly bool, relay eb.Relay, nameDomain string, srvDomain string, defaultPort uint16, ctx *dnsContext) (srvName string, srvPort uint16, err error) {
+func ensureRelayStatus(checkOnly bool, relay afnetwork.Relay, nameDomain string, srvDomain string, defaultPort uint16, ctx *dnsContext) (srvName string, srvPort uint16, err error) {
 	var port uint16
-	target, portString, err := net.SplitHostPort(relay.IPOrDNSName)
+	target, portString, err := net.SplitHostPort(relay.Address)
 	if err != nil {
-		target = relay.IPOrDNSName
+		target = relay.Address
 		port = defaultPort
 	} else {
 		var port64 uint64
@@ -296,7 +304,7 @@ func ensureRelayStatus(checkOnly bool, relay eb.Relay, nameDomain string, srvDom
 	}
 
 	if port == 0 {
-		err = fmt.Errorf("%s - port cannot be zero", relay.IPOrDNSName)
+		err = fmt.Errorf("%s - port cannot be zero", relay.Address)
 		return
 	}
 

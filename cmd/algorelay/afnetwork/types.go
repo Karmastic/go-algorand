@@ -14,12 +14,13 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with go-algorand.  If not, see <https://www.gnu.org/licenses/>.
 
-package eb
+package afnetwork
 
 // Relay represents the configuration data necessary for a single Relay
 type Relay struct {
 	ID             int64 // db key injected when loaded
-	IPOrDNSName    string
+	Address        string
+	Network        string // eg "mainnet" or "testnet"
 	MetricsEnabled bool
 	CheckSuccess   bool   // true if check was successful
 	DNSAlias       string // DNS Alias name used
