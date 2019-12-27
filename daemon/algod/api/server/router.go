@@ -71,6 +71,8 @@ import (
 	"github.com/algorand/go-algorand/daemon/algod/api/server/v1/routes"
 	"github.com/algorand/go-algorand/logging"
 	"github.com/algorand/go-algorand/node"
+
+	rlRoutes "github.com/algorand/go-algorand/plugins/rl/api/v1/routes"
 )
 
 const (
@@ -130,5 +132,11 @@ func NewRouter(logger logging.Logger, node *node.AlgorandFullNode, apiToken stri
 	// Registering v1 routes
 	registerHandlers(router, apiV1Tag, routes.Routes, ctx)
 
+	routes, prefix, err := rlRoutes.GetRoutes()
+	if err != nil {
+		logger.Errorf("Error registering custom Routes: %v\n", err)
+	} else {
+		registerHandlers(router, prefix, routes, ctx)
+	}
 	return router
 }

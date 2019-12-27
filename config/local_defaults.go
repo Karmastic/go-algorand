@@ -347,7 +347,7 @@ func migrate(cfg Local) (newCfg Local, err error) {
 		if newCfg.CatchupParallelBlocks == defaultLocalV4.CatchupParallelBlocks {
 			newCfg.CatchupParallelBlocks = defaultLocalV5.CatchupParallelBlocks
 		}
-		
+
 		newCfg.Version = 5
 	}
 

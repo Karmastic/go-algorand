@@ -494,7 +494,7 @@ func initConsensusTestProtocols() {
 	Consensus[protocol.ConsensusTestRapidRewardRecalculation] = rapidRecalcParams
 
 	// Setting the testShorterLookback parameters derived from ConsensusCurrentVersion
-	// Will result in MaxBalLookback = 32 
+	// Will result in MaxBalLookback = 32
 	// Used to run tests faster where past MaxBalLookback values are checked
 	testShorterLookback := Consensus[protocol.ConsensusCurrentVersion]
 	testShorterLookback.ApprovedUpgrades = map[protocol.ConsensusVersion]bool{}
@@ -503,7 +503,7 @@ func initConsensusTestProtocols() {
 	// ref. https://github.com/algorandfoundation/specs/blob/master/dev/abft.md
 	testShorterLookback.SeedLookback = 2
 	testShorterLookback.SeedRefreshInterval = 8
-	testShorterLookback.MaxBalLookback = 2*testShorterLookback.SeedLookback*testShorterLookback.SeedRefreshInterval // 32
+	testShorterLookback.MaxBalLookback = 2 * testShorterLookback.SeedLookback * testShorterLookback.SeedRefreshInterval // 32
 	Consensus[protocol.ConsensusTestShorterLookback] = testShorterLookback
 }
 

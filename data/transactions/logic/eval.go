@@ -849,7 +849,7 @@ func opBitNot(cx *evalContext) {
 }
 
 func opIntConstBlock(cx *evalContext) {
-	cx.intc, cx.nextpc, cx.err = parseIntcblock(cx.program, cx.pc)
+	cx.intc, cx.nextpc, _, cx.err = parseIntcblock(cx.program, cx.pc)
 }
 
 func opIntConstN(cx *evalContext, n uint) {
@@ -878,7 +878,7 @@ func opIntConst3(cx *evalContext) {
 }
 
 func opByteConstBlock(cx *evalContext) {
-	cx.bytec, cx.nextpc, cx.err = parseBytecBlock(cx.program, cx.pc)
+	cx.bytec, cx.nextpc, _, cx.err = parseBytecBlock(cx.program, cx.pc)
 }
 
 func opByteConstN(cx *evalContext, n uint) {

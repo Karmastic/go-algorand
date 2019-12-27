@@ -975,12 +975,37 @@ func AssembleString(text string) ([]byte, error) {
 	return ops.Bytes()
 }
 
+type CodePoint struct {
+	Text int
+	PC   int
+}
+type DebugData struct {
+	Version uint64
+	// LineStarts is the byte offset of each distinct instruction (line of program)
+	LineStarts []CodePoint
+	Labels     []CodePoint
+	ErrorLoc   CodePoint
+	IntCBlock  []CodePoint
+	ByteCBlock []CodePoint
+	Globals    []GlobalEntry
+
+	curLoc CodePoint
+}
+
+type GlobalEntry struct {
+	Name string
+	Loc  CodePoint
+}
+
 type disassembleState struct {
 	program       []byte
 	pc            int
-	out           io.Writer
+	out           *strings.Builder
 	labelCount    int
 	pendingLabels map[int]string
+
+	captureDebug bool
+	dd           DebugData
 
 	nextpc int
 	err    error
@@ -991,6 +1016,15 @@ func (dis *disassembleState) putLabel(label string, target int) {
 		dis.pendingLabels = make(map[int]string)
 	}
 	dis.pendingLabels[target] = label
+}
+
+func (dis *disassembleState) updateErrorLoc() {
+	dis.dd.ErrorLoc.Text = dis.out.Len()
+	dis.dd.ErrorLoc.PC = dis.nextpc
+}
+
+func (dis *disassembleState) curTextOffset() int {
+	return dis.out.Len()
 }
 
 type disassembleFunc func(dis *disassembleState)
@@ -1025,7 +1059,7 @@ func init() {
 
 var errTooManyIntc = errors.New("intcblock with too many items")
 
-func parseIntcblock(program []byte, pc int) (intc []uint64, nextpc int, err error) {
+func parseIntcblock(program []byte, pc int) (intc []uint64, nextpc int, cblockLoc []CodePoint, err error) {
 	pos := pc + 1
 	numInts, bytesUsed := binary.Uvarint(program[pos:])
 	if bytesUsed <= 0 {
@@ -1038,11 +1072,13 @@ func parseIntcblock(program []byte, pc int) (intc []uint64, nextpc int, err erro
 		return
 	}
 	intc = make([]uint64, numInts)
+	// TODO: This can be updated if 'dis.dd' is passed in, to improve location of errors
 	for i := uint64(0); i < numInts; i++ {
 		if pos >= len(program) {
 			err = fmt.Errorf("bytecblock ran past end of program")
 			return
 		}
+		cblockLoc = append(cblockLoc, CodePoint{0, pos})
 		intc[i], bytesUsed = binary.Uvarint(program[pos:])
 		if bytesUsed <= 0 {
 			err = fmt.Errorf("could not decode int const[%d] at pc=%d", i, pos)
@@ -1086,7 +1122,7 @@ func checkIntConstBlock(cx *evalContext) int {
 var errShortBytecblock = errors.New("bytecblock ran past end of program")
 var errTooManyItems = errors.New("bytecblock with too many items")
 
-func parseBytecBlock(program []byte, pc int) (bytec [][]byte, nextpc int, err error) {
+func parseBytecBlock(program []byte, pc int) (bytec [][]byte, nextpc int, cblockLoc []CodePoint, err error) {
 	pos := pc + 1
 	numItems, bytesUsed := binary.Uvarint(program[pos:])
 	if bytesUsed <= 0 {
@@ -1104,6 +1140,7 @@ func parseBytecBlock(program []byte, pc int) (bytec [][]byte, nextpc int, err er
 			err = errShortBytecblock
 			return
 		}
+		cblockLoc = append(cblockLoc, CodePoint{0, pos})
 		itemLen, bytesUsed := binary.Uvarint(program[pos:])
 		if bytesUsed <= 0 {
 			err = fmt.Errorf("could not decode []byte const[%d] at pc=%d", i, pos)
@@ -1168,7 +1205,7 @@ func checkByteConstBlock(cx *evalContext) int {
 
 func disIntcblock(dis *disassembleState) {
 	var intc []uint64
-	intc, dis.nextpc, dis.err = parseIntcblock(dis.program, dis.pc)
+	intc, dis.nextpc, dis.dd.IntCBlock, dis.err = parseIntcblock(dis.program, dis.pc)
 	if dis.err != nil {
 		return
 	}
@@ -1176,7 +1213,8 @@ func disIntcblock(dis *disassembleState) {
 	if dis.err != nil {
 		return
 	}
-	for _, iv := range intc {
+	for index, iv := range intc {
+		dis.dd.IntCBlock[index].Text = dis.out.Len()
 		_, dis.err = fmt.Fprintf(dis.out, " %d", iv)
 		if dis.err != nil {
 			return
@@ -1186,90 +1224,101 @@ func disIntcblock(dis *disassembleState) {
 }
 
 func disIntc(dis *disassembleState) {
-	dis.nextpc = dis.pc + 2
 	_, dis.err = fmt.Fprintf(dis.out, "intc %d\n", dis.program[dis.pc+1])
+	dis.nextpc = dis.pc + 2
 }
 
 func disBytecblock(dis *disassembleState) {
 	var bytec [][]byte
-	bytec, dis.nextpc, dis.err = parseBytecBlock(dis.program, dis.pc)
+	bytec, dis.nextpc, dis.dd.ByteCBlock, dis.err = parseBytecBlock(dis.program, dis.pc)
 	if dis.err != nil {
 		return
 	}
+	dis.updateErrorLoc()
 	_, dis.err = fmt.Fprintf(dis.out, "bytecblock")
 	if dis.err != nil {
 		return
 	}
-	for _, bv := range bytec {
+	for index, bv := range bytec {
+		dis.updateErrorLoc()
+		dis.dd.ByteCBlock[index].Text = dis.out.Len()
 		_, dis.err = fmt.Fprintf(dis.out, " 0x%s", hex.EncodeToString(bv))
 		if dis.err != nil {
 			return
 		}
 	}
+	dis.updateErrorLoc()
 	_, dis.err = dis.out.Write([]byte("\n"))
 }
 
 func disBytec(dis *disassembleState) {
-	dis.nextpc = dis.pc + 2
+	dis.dd.ErrorLoc.PC = dis.pc + 1
 	_, dis.err = fmt.Fprintf(dis.out, "bytec %d\n", dis.program[dis.pc+1])
+	dis.nextpc = dis.pc + 2
 }
 
 func disArg(dis *disassembleState) {
-	dis.nextpc = dis.pc + 2
+	dis.dd.ErrorLoc.PC = dis.pc + 1
 	_, dis.err = fmt.Fprintf(dis.out, "arg %d\n", dis.program[dis.pc+1])
+	dis.nextpc = dis.pc + 2
 }
 
 func disTxn(dis *disassembleState) {
-	dis.nextpc = dis.pc + 2
+	dis.updateErrorLoc()
 	txarg := dis.program[dis.pc+1]
 	if int(txarg) >= len(TxnFieldNames) {
+		dis.dd.ErrorLoc.PC = dis.pc + 1
 		dis.err = fmt.Errorf("invalid txn arg index %d at pc=%d", txarg, dis.pc)
 		return
 	}
 	_, dis.err = fmt.Fprintf(dis.out, "txn %s\n", TxnFieldNames[txarg])
+	dis.nextpc = dis.pc + 2
 }
 
 func disGtxn(dis *disassembleState) {
-	dis.nextpc = dis.pc + 3
 	gi := dis.program[dis.pc+1]
 	txarg := dis.program[dis.pc+2]
 	if int(txarg) >= len(TxnFieldNames) {
+		dis.dd.ErrorLoc.PC = dis.pc + 2
 		dis.err = fmt.Errorf("invalid txn arg index %d at pc=%d", txarg, dis.pc)
 		return
 	}
 	_, dis.err = fmt.Fprintf(dis.out, "gtxn %d %s\n", gi, TxnFieldNames[txarg])
+	dis.nextpc = dis.pc + 3
 }
 
 func disGlobal(dis *disassembleState) {
-	dis.nextpc = dis.pc + 2
 	garg := dis.program[dis.pc+1]
 	if int(garg) >= len(GlobalFieldNames) {
+		dis.dd.ErrorLoc.PC = dis.pc + 1
 		dis.err = fmt.Errorf("invalid global arg index %d at pc=%d", garg, dis.pc)
 		return
 	}
+	dis.dd.Globals = append(dis.dd.Globals, GlobalEntry{GlobalFieldNames[garg], CodePoint{dis.curTextOffset(), dis.pc+1}})
 	_, dis.err = fmt.Fprintf(dis.out, "global %s\n", GlobalFieldNames[garg])
+	dis.nextpc = dis.pc + 2
 }
 
 func disBnz(dis *disassembleState) {
-	dis.nextpc = dis.pc + 3
 	offset := (uint(dis.program[dis.pc+1]) << 8) | uint(dis.program[dis.pc+2])
 	target := int(offset) + dis.pc + 3
 	dis.labelCount++
 	label := fmt.Sprintf("label%d", dis.labelCount)
 	dis.putLabel(label, target)
 	_, dis.err = fmt.Fprintf(dis.out, "bnz %s\n", label)
+	dis.nextpc = dis.pc + 3
 }
 
 func disLoad(dis *disassembleState) {
 	n := uint(dis.program[dis.pc+1])
-	dis.nextpc = dis.pc + 2
 	_, dis.err = fmt.Fprintf(dis.out, "load %d\n", n)
+	dis.nextpc = dis.pc + 2
 }
 
 func disStore(dis *disassembleState) {
 	n := uint(dis.program[dis.pc+1])
-	dis.nextpc = dis.pc + 2
 	_, dis.err = fmt.Fprintf(dis.out, "store %d\n", n)
+	dis.nextpc = dis.pc + 2
 }
 
 // Disassemble produces a text form of program bytes.
@@ -1315,4 +1364,53 @@ func Disassemble(program []byte) (text string, err error) {
 		dis.pc++
 	}
 	return out.String(), nil
+}
+
+// DisassembleWithSymbols produces a text form of program bytes with symbol
+// information and metatdata helpful for debuggers.
+// AssembleString(DisassembleWithSymbols()) should result in the same program bytes.
+func DisassembleWithSymbols(program []byte) (text string, dd *DebugData, err error) {
+	out := strings.Builder{}
+	dis := disassembleState{program: program, captureDebug: true, out: &out}
+	dd = &dis.dd
+	version, vlen := binary.Uvarint(program)
+	if vlen <= 0 {
+		err = fmt.Errorf("empty program")
+		return
+	}
+	dis.dd.Version = version
+	dis.pc = vlen
+	for dis.pc < len(program) {
+		lineStart := out.Len()
+		curLoc := CodePoint{Text: lineStart, PC: dis.pc}
+		dis.dd.curLoc = curLoc
+		dis.dd.ErrorLoc = curLoc
+		dis.dd.LineStarts = append(dis.dd.LineStarts, curLoc)
+		label, hasLabel := dis.pendingLabels[dis.pc]
+		if hasLabel {
+			dis.dd.Labels = append(dis.dd.Labels, curLoc)
+			_, dis.err = fmt.Fprintf(dis.out, "%s:\n", label)
+			if dis.err != nil {
+				return "", dd, dis.err
+			}
+		}
+		op := opsByOpcode[program[dis.pc]]
+		if op.Name == "" {
+			msg := fmt.Sprintf("invalid opcode %02x at pc=%d", program[dis.pc], dis.pc)
+			return out.String(), dd, errors.New(msg)
+		}
+		nd, hasDis := disByName[op.Name]
+		if hasDis {
+			nd.handler(&dis)
+			if dis.err != nil {
+				return "", dd, dis.err
+			}
+			dis.pc = dis.nextpc
+			continue
+		}
+		out.WriteString(op.Name)
+		out.WriteRune('\n')
+		dis.pc++
+	}
+	return out.String(), dd, nil
 }
