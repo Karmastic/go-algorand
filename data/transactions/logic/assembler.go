@@ -976,26 +976,32 @@ func AssembleString(text string) ([]byte, error) {
 }
 
 type CodePoint struct {
-	Text int
-	PC   int
+	Text int `json:"txt"`
+	PC   int `json:"pc"`
 }
 type DebugData struct {
-	Version uint64
+	Version uint64 `json:"version"`
 	// LineStarts is the byte offset of each distinct instruction (line of program)
-	LineStarts []CodePoint
-	Labels     []CodePoint
-	ErrorLoc   CodePoint
-	IntCBlock  []CodePoint
-	ByteCBlock []CodePoint
-	Globals    []GlobalEntry
+	LineStarts  []CodePoint       `json:"lineStarts,omitempty"`
+	Labels      []CodePoint       `json:"labels,omitempty"`
+	ErrorLoc    CodePoint         `json:"errorLoc,omitempty"`
+	IntCBlock   []CodePoint       `json:"intCBlock,omitempty"`
+	ByteCBlock  []CodePoint       `json:"byteCBlock,omitempty"`
+	Globals     []GlobalEntry     `json:"globals,omitempty"`
+	TxFields    []TxFieldEntry    `json:"txFields,omitempty"`
+	GrpTxFields []GrpTxFieldEntry `json:"grpTxFields,omitempty"`
 
 	curLoc CodePoint
 }
 
-type GlobalEntry struct {
-	Name string
-	Loc  CodePoint
+type NamedEntry struct {
+	Name string    `json:"name"`
+	Loc  CodePoint `json:"loc"`
 }
+
+type GlobalEntry NamedEntry
+type TxFieldEntry NamedEntry
+type GrpTxFieldEntry NamedEntry
 
 type disassembleState struct {
 	program       []byte
@@ -1272,6 +1278,7 @@ func disTxn(dis *disassembleState) {
 		return
 	}
 	_, dis.err = fmt.Fprintf(dis.out, "txn %s\n", TxnFieldNames[txarg])
+	dis.dd.TxFields = append(dis.dd.TxFields, TxFieldEntry{TxnFieldNames[txarg], CodePoint{dis.curTextOffset() - len(TxnFieldNames[txarg]), dis.pc + 1}})
 	dis.nextpc = dis.pc + 2
 }
 
@@ -1284,6 +1291,7 @@ func disGtxn(dis *disassembleState) {
 		return
 	}
 	_, dis.err = fmt.Fprintf(dis.out, "gtxn %d %s\n", gi, TxnFieldNames[txarg])
+	dis.dd.GrpTxFields = append(dis.dd.GrpTxFields, GrpTxFieldEntry{TxnFieldNames[txarg], CodePoint{dis.curTextOffset() - len(TxnFieldNames[txarg]), dis.pc + 2}})
 	dis.nextpc = dis.pc + 3
 }
 
@@ -1294,7 +1302,7 @@ func disGlobal(dis *disassembleState) {
 		dis.err = fmt.Errorf("invalid global arg index %d at pc=%d", garg, dis.pc)
 		return
 	}
-	dis.dd.Globals = append(dis.dd.Globals, GlobalEntry{GlobalFieldNames[garg], CodePoint{dis.curTextOffset(), dis.pc+1}})
+	dis.dd.Globals = append(dis.dd.Globals, GlobalEntry{GlobalFieldNames[garg], CodePoint{dis.curTextOffset(), dis.pc + 1}})
 	_, dis.err = fmt.Fprintf(dis.out, "global %s\n", GlobalFieldNames[garg])
 	dis.nextpc = dis.pc + 2
 }

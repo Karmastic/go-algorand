@@ -76,7 +76,7 @@ func DisassembleTeal(ctx lib.ReqContext, w http.ResponseWriter, r *http.Request)
 	}
 
 	program := v1.DisassembledTeal{
-		Code: text,
+		Code:    text,
 		Symbols: *dd,
 	}
 	response := DisassembleTealResponse{&program}
